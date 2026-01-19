@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Offline Chess AI</title>
+<style>
+body{
+  margin:0;
+  font-family:Arial;
+  background:#eee;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+}
+#board{
+  margin-top:20px;
+  display:grid;
+  grid-template-columns:repeat(8,60px);
+}
+.square{
+  width:60px;height:60px;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  font-size:34px;
+  cursor:pointer;
+}
+.white{background:#f0d9b5}
+.black{background:#b58863}
+.highlight{background:yellow!important}
+#status{margin-top:15px;font-size:18px}
+.popup{
+  position:fixed;
+  top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  background:white;
+  border:2px solid black;
+  padding:15px;
+  font-size:20px;
+  z-index:99;
+}
+.popup button{
+  font-size:26px;
+  margin:5px;
+}
+</style>
+</head>
+<body>
+
+<h2>Offline Chess AI</h2>
+<div>
+  <label>Level AI: </label>
+  <select id="aiLevel" onchange="setLevel(this.value)">
+    <option value="easy">Easy</option>
+    <option value="hard" selected>Hard</option>
+  </select>
+</div>
+<div id="board"></div>
+<div id="status"></div>
+
+<script>
+const board=[];
+let turn='w';
+let selected=null;
+let moves=[];
+let gameOver=false;
+let promotion=null;
+let enPassant=null;
+
+// AI LEVEL
+let aiLevel='hard';
+
+const pieces={
+ wK:'♔',wQ:'♕',wR:'♖',wB:'♗',wN:'♘',wP:'♙',
+ bK:'♚',bQ:'♛',bR:'♜',bB:'♝',bN:'♞',bP:'♟'
+};
+
+const startPos=[
+['bR','bN','bB','bQ','bK','bB','bN','bR'],
+['bP','bP','bP','bP','bP','bP','bP','bP'],
+['','','','','','','',''],
+['','','','','','','',''],
+['','','','','','','',''],
+['','','','','','','',''],
+['wP','wP','wP','wP','wP','wP','wP','wP'],
+['wR','wN','wB','wQ','wK','wB','wN','wR']
+];
+
+init();
+
+function setLevel(l){ aiLevel=l; }
+
+function init(){
+ const b=document.getElementById('board');
+ for(let r=0;r<8;r++){
+  board[r]=[];
+  for(let c=0;c<8;c++){
+   board[r][c]=startPos[r][c];
+   const d=document.createElement('div');
+   d.className='square '+((r+c)%2?'black':'white');
+   d.dataset.r=r; d.dataset.c=c;
+   d.onclick=()=>click(r,c);
+   b.appendChild(d);
+  }
+ }
+ draw(); status();
+}
+
+function draw(){
+ document.querySelectorAll('.square').forEach(s=>{
+  const r=s.dataset.r,c=s.dataset.c;
+  s.textContent=pieces[board[r][c]]||'';
+  s.classList.remove('highlight');
+ });
+ moves.forEach(m=>{
+  document.querySelector(`.square[data-r="${m[0]}"][data-c="${m[1]}"]`)
+   .classList.add('highlight');
+ });
+}
+
+function click(r,c){
+ if(gameOver || promotion) return;
+ const p=board[r][c];
+
+ if(selected){
+  if(moves.some(m=>m[0]==r&&m[1]==c)){
+   move(selected[0],selected[1],r,c);
+   selected=null; moves=[];
+   turn=turn=='w'?'b':'w';
+   status();
+   checkState();
+   draw();
+   if(turn=='b' && !gameOver) setTimeout(aiMove,200);
+   return;
+  }
+  selected=null; moves=[]; draw();
+ }
+
+ if(p && p[0]==turn){
+  selected=[r,c];
+  moves=getLegal(r,c);
+  draw();
+ }
+}
+
+function move(sr,sc,dr,dc){
+ const p=board[sr][sc];
+ if(!p) return;
+
+ // EN PASSANT
+ if(p[1]=='P' && enPassant &&
+    dr==enPassant.r && dc==enPassant.c){
+  board[sr][dc]='';
+ }
+
+ board[dr][dc]=p;
+ board[sr][sc]='';
+
+ enPassant=null;
+ if(p[1]=='P' && Math.abs(dr-sr)==2){
+  enPassant={r:(sr+dr)/2,c:sc,color:p[0]};
+ }
+
+ if(p[1]=='P'){
+  if((p[0]=='w' && dr==0)||(p[0]=='b' && dr==7)){
+   promotion={r:dr,c:dc,color:p[0]};
+   showPromotion();
+  }
+ }
+}
+
+function showPromotion(){
+ const box=document.createElement('div');
+ box.className='popup';
+ ['Q','R','B','N'].forEach(t=>{
+  const b=document.createElement('button');
+  b.textContent=pieces[promotion.color+t];
+  b.onclick=()=>{
+   board[promotion.r][promotion.c]=promotion.color+t;
+   promotion=null;
+   box.remove();
+   draw();
+   checkState();
+   if(turn=='b' && !gameOver) setTimeout(aiMove,200);
+  };
+  box.appendChild(b);
+ });
+ document.body.appendChild(box);
+}
+
+function status(){
+ document.getElementById('status').textContent=
+  turn=='w'?'Giliran Putih':'Giliran Hitam';
+}
+
+function popup(t){
+ const p=document.createElement('div');
+ p.className='popup';
+ p.textContent=t;
+ document.body.appendChild(p);
+ setTimeout(()=>p.remove(),1200);
+}
+
+function checkState(){
+ if(isCheck(turn)){
+  if(isMate(turn)){popup('Skakmat');gameOver=true;}
+  else popup('Skak');
+ }
+}
+
+// BASIC CHESS LOGIC
+function isCheck(color){
+ const k=findKing(color);
+ for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+  const p=board[r][c];
+  if(p && p[0]!=color){
+   if(getPseudo(r,c).some(m=>m[0]==k[0]&&m[1]==k[1])) return true;
+  }
+ }
+ return false;
+}
+
+function isMate(color){
+ for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+  if(board[r][c] && board[r][c][0]==color)
+   if(getLegal(r,c).length) return false;
+ }
+ return true;
+}
+
+function findKing(color){
+ for(let r=0;r<8;r++)for(let c=0;c<8;c++)
+  if(board[r][c]==color+'K') return [r,c];
+}
+
+function getLegal(r,c){
+ return getPseudo(r,c).filter(m=>{
+  const save=board[m[0]][m[1]];
+  board[m[0]][m[1]]=board[r][c];
+  board[r][c]='';
+  const ok=!isCheck(board[m[0]][m[1]][0]);
+  board[r][c]=board[m[0]][m[1]];
+  board[m[0]][m[1]]=save;
+  return ok;
+ });
+}
+
+function getPseudo(r,c){
+ const p=board[r][c]; if(!p) return [];
+ const col=p[0],t=p[1],res=[];
+ const dir=col=='w'?-1:1;
+
+ if(t=='P'){
+  if(board[r+dir]?.[c]==='') res.push([r+dir,c]);
+  if((r==6&&col=='w'||r==1&&col=='b') &&
+     board[r+dir]?.[c]==='' && board[r+2*dir]?.[c]==='')
+   res.push([r+2*dir,c]);
+
+  if(board[r+dir]?.[c-1] && board[r+dir][c-1][0]!=col)
+   res.push([r+dir,c-1]);
+  if(board[r+dir]?.[c+1] && board[r+dir][c+1][0]!=col)
+   res.push([r+dir,c+1]);
+
+  if(enPassant && enPassant.color!=col){
+   if(r==(col=='w'?3:4) && Math.abs(c-enPassant.c)==1)
+    res.push([r+dir,enPassant.c]);
+  }
+ }
+
+ if(t=='R'||t=='Q')
+  [[1,0],[-1,0],[0,1],[0,-1]].forEach(d=>ray(r,c,d,res,col));
+ if(t=='B'||t=='Q')
+  [[1,1],[1,-1],[-1,1],[-1,-1]].forEach(d=>ray(r,c,d,res,col));
+ if(t=='N')
+  [[2,1],[1,2],[-1,2],[-2,1],[-2,-1],[-1,-2],[1,-2],[2,-1]]
+   .forEach(d=>push(r+d[0],c+d[1],res,col));
+ if(t=='K')
+  [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]]
+   .forEach(d=>push(r+d[0],c+d[1],res,col));
+
+ return res;
+}
+
+function ray(r,c,d,res,col){
+ let i=r+d[0],j=c+d[1];
+ while(i>=0 && i<8 && j>=0 && j<8){
+  if(!board[i][j]) res.push([i,j]);
+  else{ if(board[i][j][0]!=col) res.push([i,j]); break;}
+  i+=d[0]; j+=d[1];
+ }
+}
+
+function push(r,c,res,col){
+ if(r>=0&&r<8&&c>=0&&c<8 && (!board[r][c]||board[r][c][0]!=col))
+  res.push([r,c]);
+}
+
+// ========== AI ==========
+
+function aiMove(){
+ const moves=getAllMoves('b');
+ if(moves.length==0) return;
+
+ if(aiLevel=='easy'){
+  const m=moves[Math.floor(Math.random()*moves.length)];
+  move(...m);
+ } else {
+  let best=null;
+  let bestVal=1e9;
+  for(const m of moves){
+   const save=cloneBoard();
+   move(...m);
+   const v=minimax(2,true);
+   restoreBoard(save);
+   if(v<bestVal){bestVal=v; best=m;}
+  }
+  if(best) move(...best);
+ }
+
+ draw();
+ turn='w';
+ status();
+ checkState();
+}
+
+// KUMPULKAN SEMUA MOVE WARNA
+function getAllMoves(color){
+ let res=[];
+ for(let r=0;r<8;r++)
+  for(let c=0;c<8;c++)
+   if(board[r][c] && board[r][c][0]==color)
+    getLegal(r,c).forEach(m=>res.push([r,c,...m]));
+ return res;
+}
+
+// CLONE BOARD
+function cloneBoard(){return board.map(r=>r.slice());}
+function restoreBoard(b){for(let i=0;i<8;i++) board[i]=b[i].slice();}
+
+// MINIMAX SEDERHANA
+function minimax(depth,isMax){
+ if(depth==0) return evaluate();
+ const color=isMax?'w':'b';
+ const moves=getAllMoves(color);
+ if(moves.length==0) return evaluate();
+
+ let best=isMax?-1e9:1e9;
+ for(const m of moves){
+  const save=cloneBoard();
+  move(...m);
+  const val=minimax(depth-1,!isMax);
+  restoreBoard(save);
+  if(isMax) best=Math.max(best,val);
+  else best=Math.min(best,val);
+ }
+ return best;
+}
+
+// EVALUASI SEDERHANA
+function evaluate(){
+ let val=0;
+ const score={'P':1,'N':3,'B':3,'R':5,'Q':9,'K':0};
+ for(let r=0;r<8;r++) for(let c=0;c<8;c++){
+  const p=board[r][c];
+  if(p){
+   val+=(p[0]=='w'?1:-1)*score[p[1]];
+  }
+ }
+ return val;
+}
+</script>
+</body>
+</html>
